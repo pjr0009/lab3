@@ -38,13 +38,18 @@
 *                                  Global data                                *
 \*****************************************************************************/
 Event e;
-double RT[32], TT[32];
-
+double RespTime[32], TurnaroundTime[32];
 Status tempFlags;
-int placeNextEvent = 0, totalEvents = 0, eventServiceCount = 0, deviceEvents[32], deviceEventsServiced[32];
-Event capturedEvents[200];
+int capturedLength = 0, capturedIndex = 0, totalEvents = 0, eventServiceCount = 0, deviceEvents[32], deviceEventsServiced[32];
+
+// array of events captured and waiting for processing
+Event capturedEvents[1000];
 
 
+int processedEvents[100];
+int processedLength;
+
+int in_use = 0;
 
 /*****************************************************************************\
 *                               Function prototypes                           *
@@ -81,20 +86,59 @@ int main (int argc, char **argv) {
  * Function: Monitor Devices and process events (written by students)    *
  \***********************************************************************/
 void Control(void){ 
-
-  while (1) {
-  if (totalEvents ) {
-    if (eventServiceCount >= 200) {eventServiceCount = 0;}
-    Event temp = capturedEvents[eventServiceCount];
-    RT[temp.DeviceID] += Now() - temp.When;
-    DisplayEvent('X', &temp);
-    // Server(&temp);
-    deviceEventsServiced[temp.DeviceID] += 1;
-    TT[temp.DeviceID] += Now() - temp.When;
-    eventServiceCount++;
-    totalEvents--;
+  int f;
+  for(f = 0; f < 100; f++){
+    processedEvents[f] = -1;
   }
+  int processedIndex = 0;
+  int k;
+  //busy waiting loop
+  while (1) {
 
+    // if we have events to process
+    int i;
+    if(totalEvents){
+      for(i = 0; i < capturedLength; i++){
+          Event temp;
+          memcpy(&temp, &capturedEvents[i], sizeof(Event));
+          int value = (temp.DeviceID * 100) + temp.EventID;
+          //see if the the event has already been processed
+          int processed = 0;
+          for(k = 0; k < processedLength; k++){
+            printf("\n %d %d \n", processedEvents[k], value);
+            if(processedEvents[k] == value){
+              processed = 1;
+            }
+          }
+          if(!processed){
+            memcpy(&processedEvents[processedIndex], &value, sizeof(int));
+            deviceEvents[temp.DeviceID] += 1;
+            deviceEventsServiced[temp.DeviceID] += 1;
+            if(processedLength < 100){
+              processedLength++;
+            }
+            if(processedIndex < 99){
+              processedIndex++;
+            } else {
+              processedIndex = 0;
+            }
+            totalEvents--;
+            Server(&temp);
+
+          }
+          // printf("\n at index %d: device ID: %d, event ID: %d, checked to see if already processed at %d\n\n\n",
+            // i,
+            // temp.DeviceID,
+            // temp.EventID,
+            // value);
+        }
+        sleep(100);
+
+      }
+      
+      // RespTime[temp.DeviceID] += Now() - temp.When;
+      // deviceEventsServiced[temp.DeviceID] += 1;
+      // TurnaroundTime[temp.DeviceID] += Now() - temp.When;
   } 
 }
 
@@ -106,30 +150,31 @@ void Control(void){
 *           The id of the device is encoded in the variable flag        *
 \***********************************************************************/
 void InterruptRoutineHandlerDevice(void){
-    printf("An event occured at %f  Flags = %d \n", Now(), Flags);
-  
-  tempFlags = Flags;
-  Flags = 0;
   int position = 0;
   double start = Now();
-  while (tempFlags) {             //Loops through servicing events from each device in the order of 1-32, ends when no CurrentStatus == 0
-    if (tempFlags & 1) { 
-      if ( placeNextEvent >= 200) {placeNextEvent = 0;}         //Sets to 0 so we never run out of room
-      e = BufferLastEvent[position];      //Holder variable for event
-      capturedEvents[placeNextEvent] = e;
-      deviceEvents[e.DeviceID] += 1;
-      printf("EventID just stored: %i \n", capturedEvents[placeNextEvent].EventID);
-      placeNextEvent++;
+  tempFlags = Flags; // store this so we can get through 
+
+  
+  // within the length of one interrupt handle raised flags
+  while (tempFlags > 0) {
+    if ((tempFlags >= 1) & 1) {  // roll off captured flag
+      e = BufferLastEvent[position];      // grab event from buffer
+      // DisplayEvent('A', &e);
+      memcpy(&capturedEvents[capturedIndex], &e, sizeof(Event)); // deep copy to captured events
+      // deviceEvents[e.DeviceID] += 1; //increment events for device
+      if(capturedIndex >= 999){capturedIndex = 0;}else{capturedIndex++;}
+      if(capturedLength >= 999){capturedLength = 999;}else{capturedLength++;}
       totalEvents++;            
+      int ithBitHandled = (1 >> (position));
+      Flags &= ~ithBitHandled;
     }
-    position ++;
     tempFlags >>= 1;
+    position++;
   }
   double end = Now();
-  printf("Time elapsed: %f ", end - start);
+  // printf("Time elapsed: %f ", end - start);
   // Put Here the most urgent steps that cannot wait
 }
-
 
 /***********************************************************************\
 * Input : None                                                          *
@@ -142,8 +187,13 @@ void BookKeeping(void){
   // 1) the percentage of missed events, 2) the average response time, and 
   // 3) the average turnaround time.
   // Print the overall averages of the three metrics 1-3 above
+  int i;
+  for(i = 0; i < 32; i++){
+    if(deviceEvents[i] > 0){
+      printf("\n Device %2d generated about %d events and you missed %3d.", i, deviceEvents[i], deviceEvents[i]-deviceEventsServiced[i]);
+    }
+  }
   
-  printf("Bookkeeping activated");
 }
 
 
