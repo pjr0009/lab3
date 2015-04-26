@@ -25,6 +25,7 @@
 
 
 
+#define  MAX_QUEUE_SIZE 32
 
 
 /*****************************************************************************\
@@ -39,11 +40,12 @@
 \*****************************************************************************/
 Event e;
 double RespTime[32], TurnaroundTime[32];
+double RespTimeHigh[32], TurnaroundTimeHigh[32];
 Status tempFlags;
 int capturedLength = 0, capturedIndex = 0, totalEvents = 0, eventServiceCount = 0, deviceEvents[32], deviceEventsServiced[32];
 
 // array of events captured and waiting for processing
-Event capturedEvents[1000];
+Event capturedEvents[MAX_QUEUE_SIZE];
 
 
 int processedEvents[100];
@@ -101,44 +103,85 @@ void Control(void){
       for(i = 0; i < capturedLength; i++){
           Event temp;
           memcpy(&temp, &capturedEvents[i], sizeof(Event));
-          int value = (temp.DeviceID * 100) + temp.EventID;
-          //see if the the event has already been processed
-          int processed = 0;
-          for(k = 0; k < processedLength; k++){
-            printf("\n %d %d \n", processedEvents[k], value);
-            if(processedEvents[k] == value){
-              processed = 1;
+          if(temp.priority == 0){
+            RespTimeHigh[temp.DeviceID] = Now() - temp.When;
+            int value = (temp.DeviceID * 100) + temp.EventID;
+            //see if the the event has already been processed
+            int processed = 0;
+            for(k = 0; k < processedLength; k++){
+              if(processedEvents[k] == value){
+                processed = 1;
+              }
             }
-          }
-          if(!processed){
-            memcpy(&processedEvents[processedIndex], &value, sizeof(int));
-            deviceEvents[temp.DeviceID] += 1;
-            deviceEventsServiced[temp.DeviceID] += 1;
-            if(processedLength < 100){
-              processedLength++;
-            }
-            if(processedIndex < 99){
-              processedIndex++;
-            } else {
-              processedIndex = 0;
-            }
-            totalEvents--;
-            Server(&temp);
 
+
+            if(!processed){
+              deviceEvents[temp.DeviceID]++; //increment events for device
+              deviceEventsServiced[temp.DeviceID] += 1;
+              memcpy(&processedEvents[processedIndex], &value, sizeof(int));
+              if(processedLength < 100){
+                processedLength++;
+              }
+              if(processedIndex < 99){
+                processedIndex++;
+              } else {
+                processedIndex = 0;
+              }
+              totalEvents--;
+              Server(&temp);
+          
+            }
+            double time =  Now() - temp.When;
+            TurnaroundTimeHigh[temp.DeviceID] = time;
+            // printf("\n at index %d: device ID: %d, event ID: %d, checked to see if already processed at %d\n\n\n",
+              // i,
+              // temp.DeviceID,
+              // temp.EventID,
+              // value);
           }
-          // printf("\n at index %d: device ID: %d, event ID: %d, checked to see if already processed at %d\n\n\n",
-            // i,
-            // temp.DeviceID,
-            // temp.EventID,
-            // value);
-        }
-        sleep(100);
+      }
+      for(i = 0; i < capturedLength; i++){
+          Event temp;
+          memcpy(&temp, &capturedEvents[i], sizeof(Event));
+          if(temp.priority > 0){
+            RespTime[temp.DeviceID] = Now() - temp.When;
+            int value = (temp.DeviceID * 100) + temp.EventID;
+            //see if the the event has already been processed
+            int processed = 0;
+            for(k = 0; k < processedLength; k++){
+              if(processedEvents[k] == value){
+                processed = 1;
+              }
+            }
+
+
+            if(!processed){
+              deviceEvents[temp.DeviceID]++; //increment events for device
+              deviceEventsServiced[temp.DeviceID] += 1;
+              memcpy(&processedEvents[processedIndex], &value, sizeof(int));
+              if(processedLength < 100){
+                processedLength++;
+              }
+              if(processedIndex < 99){
+                processedIndex++;
+              } else {
+                processedIndex = 0;
+              }
+              totalEvents--;
+              Server(&temp);
+          
+            }
+            double time =  Now() - temp.When;
+            TurnaroundTime[temp.DeviceID] = time;
+            // printf("\n at index %d: device ID: %d, event ID: %d, checked to see if already processed at %d\n\n\n",
+              // i,
+              // temp.DeviceID,
+              // temp.EventID,
+              // value);
+          }
+      }
 
       }
-      
-      // RespTime[temp.DeviceID] += Now() - temp.When;
-      // deviceEventsServiced[temp.DeviceID] += 1;
-      // TurnaroundTime[temp.DeviceID] += Now() - temp.When;
   } 
 }
 
@@ -158,12 +201,11 @@ void InterruptRoutineHandlerDevice(void){
   // within the length of one interrupt handle raised flags
   while (tempFlags > 0) {
     if ((tempFlags >= 1) & 1) {  // roll off captured flag
-      e = BufferLastEvent[position];      // grab event from buffer
+      memcpy(&e, &BufferLastEvent[position], sizeof(Event));      // grab event from buffer
       // DisplayEvent('A', &e);
       memcpy(&capturedEvents[capturedIndex], &e, sizeof(Event)); // deep copy to captured events
-      // deviceEvents[e.DeviceID] += 1; //increment events for device
-      if(capturedIndex >= 999){capturedIndex = 0;}else{capturedIndex++;}
-      if(capturedLength >= 999){capturedLength = 999;}else{capturedLength++;}
+      if(capturedIndex >= MAX_QUEUE_SIZE){capturedIndex = 0;}else{capturedIndex++;}
+      if(capturedLength >= MAX_QUEUE_SIZE){capturedLength = MAX_QUEUE_SIZE;}else{capturedLength++;}
       totalEvents++;            
       int ithBitHandled = (1 >> (position));
       Flags &= ~ithBitHandled;
@@ -175,6 +217,7 @@ void InterruptRoutineHandlerDevice(void){
   // printf("Time elapsed: %f ", end - start);
   // Put Here the most urgent steps that cannot wait
 }
+
 
 /***********************************************************************\
 * Input : None                                                          *
@@ -188,11 +231,25 @@ void BookKeeping(void){
   // 3) the average turnaround time.
   // Print the overall averages of the three metrics 1-3 above
   int i;
-  for(i = 0; i < 32; i++){
-    if(deviceEvents[i] > 0){
-      printf("\n Device %2d generated about %d events and you missed %3d.", i, deviceEvents[i], deviceEvents[i]-deviceEventsServiced[i]);
+  int numDevices = 0;
+  int missedEventsTotal = 0;
+  double responseTimeTotal = 0;
+  double responseTimeTotalHigh = 0;
+  double turnaroundTimeTotal = 0;
+  double turnaroundTimeTotalHigh = 0;
+  for(i = 0; i < MAX_NUMBER_DEVICES; i++){
+    
+    if(deviceEvents[i] != 0){
+      numDevices+= 1;
+      missedEventsTotal += (deviceEvents[i] - deviceEventsServiced[i]);
+      responseTimeTotal += RespTime[i];
+      responseTimeTotalHigh += RespTimeHigh[i];
+      turnaroundTimeTotal += TurnaroundTime[i];
+      turnaroundTimeTotalHigh += TurnaroundTimeHigh[i];
+
     }
   }
+  printf("\n %d %2f %2f %2f %2f \n", (missedEventsTotal/numDevices), (responseTimeTotalHigh/numDevices), (turnaroundTimeTotalHigh/numDevices), (responseTimeTotal/numDevices), (turnaroundTimeTotal/numDevices));
   
 }
 
